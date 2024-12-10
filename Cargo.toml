@@ -1,0 +1,8 @@
+[package]
+name = "watcher"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+notify = "6.1"
+clap = { version = "4.4", features = ["derive"] }
