@@ -1,5 +1,6 @@
 use clap::Parser;
 use notify::{EventKind, RecursiveMode, Watcher};
+use std::env;
 use std::io::{BufRead, BufReader};
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
@@ -45,11 +46,10 @@ fn has_matching_extension(path: &std::path::Path, extensions: &[String]) -> bool
         .unwrap_or(false)
 }
 
-fn process_compiler_output(reader: BufReader<impl std::io::Read>, is_stderr: bool) {
+fn process_output(reader: BufReader<impl std::io::Read>, is_stderr: bool) {
     for line in reader.lines().filter_map(|line| line.ok()) {
-        // Detect compiler errors and warnings
-        if is_stderr || line.contains("error:") || line.contains("warning:") {
-            eprintln!("\x1b[31m{}\x1b[0m", line); // Print in red
+        if is_stderr {
+            eprintln!("\x1b[31m{}\x1b[0m", line);
         } else {
             println!("{}", line);
         }
@@ -85,6 +85,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut last_run = Instant::now() - Duration::from_secs(10);
     let debounce_duration = Duration::from_millis(500);
 
+    // Get the current environment variables
+    let env_vars: Vec<(String, String)> = env::vars().collect();
+
     loop {
         match rx.recv_timeout(Duration::from_secs(1)) {
             Ok(event) => {
@@ -110,32 +113,36 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 println!("Changed files: {:?}", event.paths);
                 println!("Executing command...\n");
 
-                let mut child = Command::new(program)
+                let mut command = Command::new(program);
+                command
                     .args(args)
                     .current_dir(&cli.directory)
                     .stdout(Stdio::piped())
-                    .stderr(Stdio::piped())
-                    .spawn()?;
+                    .stderr(Stdio::piped());
+
+                // Pass through all environment variables
+                for (key, value) in &env_vars {
+                    command.env(key, value);
+                }
+
+                let mut child = command.spawn()?;
 
                 let stdout = child.stdout.take().expect("Failed to capture stdout");
                 let stderr = child.stderr.take().expect("Failed to capture stderr");
 
-                // Process stdout and stderr with proper error highlighting
                 let stdout_thread = thread::spawn(move || {
                     let reader = BufReader::new(stdout);
-                    process_compiler_output(reader, false);
+                    process_output(reader, false);
                 });
 
                 let stderr_thread = thread::spawn(move || {
                     let reader = BufReader::new(stderr);
-                    process_compiler_output(reader, true);
+                    process_output(reader, true);
                 });
 
-                // Wait for output threads to complete
                 stdout_thread.join().unwrap();
                 stderr_thread.join().unwrap();
 
-                // Wait for the command to complete
                 match child.wait() {
                     Ok(status) => {
                         if !status.success() {
