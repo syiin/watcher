@@ -45,6 +45,17 @@ fn has_matching_extension(path: &std::path::Path, extensions: &[String]) -> bool
         .unwrap_or(false)
 }
 
+fn process_compiler_output(reader: BufReader<impl std::io::Read>, is_stderr: bool) {
+    for line in reader.lines().filter_map(|line| line.ok()) {
+        // Detect compiler errors and warnings
+        if is_stderr || line.contains("error:") || line.contains("warning:") {
+            eprintln!("\x1b[31m{}\x1b[0m", line); // Print in red
+        } else {
+            println!("{}", line);
+        }
+    }
+}
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
 
@@ -109,21 +120,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let stdout = child.stdout.take().expect("Failed to capture stdout");
                 let stderr = child.stderr.take().expect("Failed to capture stderr");
 
-                // Handle stdout and stderr in separate threads
+                // Process stdout and stderr with proper error highlighting
                 let stdout_thread = thread::spawn(move || {
                     let reader = BufReader::new(stdout);
-                    reader
-                        .lines()
-                        .filter_map(|line| line.ok())
-                        .for_each(|line| println!("{}", line));
+                    process_compiler_output(reader, false);
                 });
 
                 let stderr_thread = thread::spawn(move || {
                     let reader = BufReader::new(stderr);
-                    reader
-                        .lines()
-                        .filter_map(|line| line.ok())
-                        .for_each(|line| eprintln!("{}", line));
+                    process_compiler_output(reader, true);
                 });
 
                 // Wait for output threads to complete
@@ -134,19 +139,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 match child.wait() {
                     Ok(status) => {
                         if !status.success() {
-                            eprintln!("\nCommand failed with status: {}", status);
+                            eprintln!("\n\x1b[31mCommand failed with status: {}\x1b[0m", status);
+                            if let Some(code) = status.code() {
+                                eprintln!("\x1b[31mExit code: {}\x1b[0m", code);
+                            }
                         } else {
-                            println!("\nCommand completed successfully");
+                            println!("\n\x1b[32mCommand completed successfully\x1b[0m");
                         }
                     }
-                    Err(e) => eprintln!("\nError waiting for command: {}", e),
+                    Err(e) => eprintln!("\n\x1b[31mError waiting for command: {}\x1b[0m", e),
                 }
 
                 println!("\nWaiting for file changes...");
             }
             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => continue,
             Err(e) => {
-                eprintln!("Watch error: {:?}", e);
+                eprintln!("\x1b[31mWatch error: {:?}\x1b[0m", e);
                 break;
             }
         }
